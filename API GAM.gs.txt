@@ -1,0 +1,300 @@
+function API_GAM() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+  // --- Sheet destino ---
+  let sheet = spreadsheet.getSheetByName('BD – GAM'); // cuide para usar exatamente o mesmo nome da aba
+  if (!sheet) sheet = spreadsheet.insertSheet('BD – GAM');
+
+  // --- Utils ---
+  const formatDate = (date) => {
+    const y = date.getFullYear();
+    const m = ('0' + (date.getMonth() + 1)).slice(-2);
+    const d = ('0' + date.getDate()).slice(-2);
+    return `${y}-${m}-${d}`;
+  };
+  const round2 = (x) => Math.round(x * 100) / 100;
+
+  // Helpers que usam a mesma instância de spreadsheet (evita getActiveSpreadsheet() repetido)
+  function getSitesCsvFromSheet_(sheetName, rangeA1) {
+    const list = getSitesListFromSheet_(sheetName, rangeA1);
+    const csv = list.join(',');
+    Logger.log('[SITES] %s', csv);
+    if (!csv) throw new Error('Nenhum site encontrado em ' + sheetName + '!');
+    return csv;
+  }
+
+  function getSitesListFromSheet_(sheetName, rangeA1) {
+    const sh = spreadsheet.getSheetByName(sheetName);
+    if (!sh) throw new Error('Aba não encontrada: ' + sheetName);
+    const values = sh.getRange(rangeA1).getValues()
+      .map(r => (r[0] || '').toString().trim())
+      .filter(Boolean);
+
+    const cleaned = values.map(cleanToHostname_).filter(Boolean).map(s => s.toLowerCase());
+    const seen = new Set();
+    const unique = [];
+    for (const host of cleaned) {
+      if (!seen.has(host)) {
+        seen.add(host);
+        unique.push(host);
+      }
+    }
+    return unique;
+  }
+
+  function cleanToHostname_(s) {
+    try {
+      if (/^https?:\/\//i.test(s)) {
+        const u = new URL(s);
+        return u.hostname; // mantém subdomínios e 'www'
+      }
+      return s.split(/[\/\?]/)[0].trim(); // não remove 'www.'
+    } catch (e) {
+      return s.split(/[\/\?]/)[0].trim();
+    }
+  }
+
+  function getChannelRegexFromSheet_(sheetName, rangeA1, strict = true) {
+    const list = getChannelListFromSheet_(sheetName, rangeA1);
+    if (!list.length) throw new Error('Nenhum utm_source encontrado em ' + sheetName);
+
+    const escaped = list.map(escapeRegex_);
+    const group = escaped.join('|');
+    const pattern = strict
+      ? `(?:^|[?&])utm_source=(${group})(?=&|$)`
+      : `utm_source=(${group})`;
+
+    const rx = new RegExp(pattern, 'i');
+    Logger.log('[CHANNEL_REGEX] /%s/i', pattern);
+    return rx;
+  }
+
+  function getChannelListFromSheet_(sheetName, rangeA1) {
+    const sh = spreadsheet.getSheetByName(sheetName);
+    if (!sh) throw new Error('Aba não encontrada: ' + sheetName);
+    const values = sh.getRange(rangeA1).getValues()
+      .map(r => (r[0] || '').toString().trim())
+      .filter(Boolean);
+
+    const seen = new Set();
+    const list = [];
+    for (let v of values) {
+      v = v.toLowerCase();
+      const m = v.match(/utm_source\s*=\s*(.+)/i);
+      const src = (m ? m[1] : v).trim();
+      if (!src) continue;
+      if (!seen.has(src)) {
+        seen.add(src);
+        list.push(src);
+      }
+    }
+    return list;
+  }
+
+  function escapeRegex_(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // --- Datas (ontem -> hoje) ---
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const startDate = formatDate(yesterday);
+  const endDate   = formatDate(today);
+
+  // --- Config API ---
+  const url   = 'https://my.spun.com.br/api/admanager/data';
+  const token = '8jwl4v1ZmBYQlwFzPPEHNkYC8IOvRxB3ino1665b93f36cd228';
+
+  var dashboardSheet2 = spreadsheet.getSheetByName('Auxiliar');
+  var exchangeRate = 5.35;
+
+  // --- Domínios ---
+  const domains = [
+    { domain: "formoney.com.br",           networkCode: "22092319519", currency: "USD" },
+    { domain: "moneynews.com.br",          networkCode: "22029402328", currency: "USD" },
+    { domain: "universoapps.com",          networkCode: "23054106070", currency: "USD" },
+    { domain: "usmoney.com.br",            networkCode: "22899417929", currency: "USD" },
+    { domain: "altarendabr.com",           networkCode: "21793928928", currency: "BRL" },
+    { domain: "beneficioja.com.br",        networkCode: "22951275967", currency: "USD" },
+    { domain: "cursosedu.com",             networkCode: "21794032018", currency: "USD" },
+    { domain: "sofinancas.com",            networkCode: "21794032018", currency: "USD" },
+    { domain: "fincopilot.net",            networkCode: "21970732775", currency: "BRL" },
+    { domain: "financegenial.com",         networkCode: "23041827327", currency: "USD" },
+    { domain: "globalcursosbr.com",        networkCode: "23041827327", currency: "USD" },
+    { domain: "limiteliberado.com",        networkCode: "23041827327", currency: "USD" },
+    { domain: "limitealto.com",            networkCode: "23114526276", currency: "USD" },
+    { domain: "totalfinancas.com",         networkCode: "21679153829", currency: "USD" },
+    { domain: "widescope4.com",            networkCode: "23288446992", currency: "USD" },
+    { domain: "dissemedisse.com",          networkCode: "21962277692", currency: "USD" },
+    { domain: "finantict.com",             networkCode: "12219877",    currency: "BRL" },
+    { domain: "thetrendsportal.com",       networkCode: "12219877",    currency: "BRL" },
+    { domain: "oportalideal.com",          networkCode: "23312431047", currency: "BRL" },
+    { domain: "agoranamidia.com",          networkCode: "21655197668", currency: "BRL" },
+    { domain: "caxiason.com.br",           networkCode: "21655197668", currency: "BRL" },
+    { domain: "guiabancario.com.br",       networkCode: "21655197668", currency: "BRL" },
+    { domain: "genialcredito.com",         networkCode: "21938760094", currency: "BRL" },
+    { domain: "financecaxias.com",         networkCode: "23148707119", currency: "USD" },
+    { domain: "infovision7.com",           networkCode: "23148707119", currency: "USD" },
+    { domain: "de8.com.br",                networkCode: "22705810042", currency: "USD" },
+    { domain: "meucartaoideal.com",        networkCode: "21655197668", currency: "BRL" },
+    { domain: "meucreditoagora.com",       networkCode: "21761578357", currency: "BRL" },
+    { domain: "rendademae.com",            networkCode: "22883124850", currency: "USD" },
+    { domain: "thecredito.com.br",         networkCode: "21655197668", currency: "BRL" },
+    { domain: "zienic.com",                networkCode: "22407091784", currency: "USD" },
+    { domain: "netdinheiro.com.br",        networkCode: "21629126805", currency: "BRL" },
+    { domain: "coinvistu.com",             networkCode: "23279186968", currency: "USD" },
+    { domain: "creativepulse23.com",       networkCode: "23144189085", currency: "USD" },
+    { domain: "mundodasfinancas.com.br",   networkCode: "22969181990", currency: "BRL" },
+    { domain: "usfinancemore.com",         networkCode: "23158280633", currency: "BRL" },
+    { domain: "prospervein.com",           networkCode: "21655197668", currency: "BRL" },
+    { domain: "financasdomundo.com.br",    networkCode: "22857480327", currency: "BRL"},
+    { domain: "credittus.com",             networkCode: "41735517",    currency: "BRL"},
+    { domain: "mynextcredit.com",          networkCode: "62913895",    currency: "BRL"},
+    { domain: "ourtipsdroid.com",          networkCode: "23022527020", currency: "USD"},
+    { domain: "brcartao.com",              networkCode: "22984260806", currency: "USD"}
+  ];
+
+  // --- Cabeçalhos ---
+  const headers = ['Data', 'Hora', 'Site', 'Canal', 'URL', 'Bloco', 'Solicitações', 'Receita (USD)', 'Cobertura (%)', 'eCPM'];
+
+  // --- Pré-carregamentos de planilha (evita I/O repetido) ---
+  const sitesCsv = getSitesCsvFromSheet_('Config - RevShare', 'A2:A200');            // apenas 1x
+  const channelFilterRegex = getChannelRegexFromSheet_('Config - Trafego', 'C2:C100'); // apenas 1x
+
+  // --- Montagem das requisições (paralelas) ---
+  const requests = domains.map(d => ({
+    url: url,
+    method: 'post',
+    payload: JSON.stringify({
+      dimensions: ['DATE', 'HOUR', 'SITE_NAME', 'CHANNEL_NAME', 'URL_NAME', 'AD_UNIT_NAME'],
+      columns: ['AD_EXCHANGE_TOTAL_REQUESTS', 'AD_EXCHANGE_LINE_ITEM_LEVEL_REVENUE', 'AD_EXCHANGE_MATCH_RATE', 'AD_EXCHANGE_LINE_ITEM_LEVEL_AVERAGE_ECPM'],
+      start_date: startDate,
+      end_date: endDate,
+      domain: d.domain,
+      networkCode: d.networkCode,
+      site_name: sitesCsv
+    }),
+    headers: { 'Authorization': token, 'Content-Type': 'application/json' },
+    muteHttpExceptions: true,
+    domainInfo: d
+  }));
+
+  // --- 1ª chamada em paralelo ---
+  const initialResponses = UrlFetchApp.fetchAll(requests);
+
+  // --- Retry para respostas com erro 500 (até 3 tentativas no total) ---
+  const maxAttempts   = 3;      // tentativa inicial + 2 retries
+  const retryInterval = 250;    // ms
+  const finalResponses = initialResponses.slice(); // cópia
+
+  for (let i = 0; i < initialResponses.length; i++) {
+    const resp   = initialResponses[i];
+    const code   = resp.getResponseCode();
+    const domain = requests[i].domainInfo.domain;
+
+    Logger.log('Status inicial %s: %s', domain, code);
+
+    if (code === 500) {
+      Logger.log('Status 500 para %s. Iniciando tentativas extras (até %s vezes)...', domain, maxAttempts);
+
+      let attempt = 1; // já tivemos 1 tentativa (fetchAll)
+      let newResp = resp;
+
+      while (attempt < maxAttempts && newResp.getResponseCode() === 500) {
+        attempt++;
+        Logger.log('Tentativa %s de %s para %s após erro 500...', attempt, maxAttempts, domain);
+        Utilities.sleep(retryInterval);
+
+        try {
+          // Usa UrlFetchApp.fetch para a tentativa extra
+          newResp = UrlFetchApp.fetch(requests[i].url, requests[i]);
+          Logger.log('Tentativa %s para %s retornou status: %s', attempt, domain, newResp.getResponseCode());
+        } catch (e) {
+          Logger.log('Erro na tentativa extra %s para %s: %s', attempt, domain, e);
+          break; // se der erro de exceção, não adianta seguir
+        }
+      }
+
+      finalResponses[i] = newResp;
+    }
+  }
+
+  // --- Processamento das respostas (já com possíveis retries aplicados) ---
+  const allRows = [];
+  for (let i = 0; i < finalResponses.length; i++) {
+    const response = finalResponses[i];
+    const { domain, currency } = requests[i].domainInfo;
+    const isBRL = (currency === 'BRL');
+
+    let content;
+    try {
+      content = response.getContentText();
+      const statusCode = response.getResponseCode();
+
+      if (statusCode !== 200) {
+        Logger.log('Resposta não OK para %s (status %s). Body (primeiros 500 chars): %s',
+          domain, statusCode, content ? content.substring(0, 500) : '');
+        continue;
+      }
+
+      const jsonData = JSON.parse(content);
+      if (!Array.isArray(jsonData)) {
+        Logger.log('Resposta de %s não é array. Ignorando.', domain);
+        continue;
+      }
+
+      for (let j = 0; j < jsonData.length; j++) {
+        const row = jsonData[j];
+        const channel = row['Dimension.CHANNEL_NAME'];
+        const urlName = row['Dimension.URL_NAME'];
+        if (!channel || !urlName) continue;
+
+        // filtro por canal vindo da planilha + garantir URL com "/"
+        if (!channelFilterRegex.test(channel) || urlName.indexOf('/') === -1) continue;
+
+        // métricas
+        let revenue = row['Column.AD_EXCHANGE_LINE_ITEM_LEVEL_REVENUE'] / 1000000;
+        let eCPM    = row['Column.AD_EXCHANGE_LINE_ITEM_LEVEL_AVERAGE_ECPM'] / 1000000;
+        if (isBRL) {
+          revenue /= exchangeRate;
+          eCPM    /= exchangeRate;
+        }
+        const matchRate = parseFloat(row['Column.AD_EXCHANGE_MATCH_RATE']); // ex.: 0.7523
+
+        allRows.push([
+          row['Dimension.DATE'],
+          row['Dimension.HOUR'],
+          row['Dimension.SITE_NAME'],
+          channel,
+          urlName,
+          row['Dimension.AD_UNIT_NAME'],
+          row['Column.AD_EXCHANGE_TOTAL_REQUESTS'],
+          round2(revenue),                     // Receita (USD)
+          isNaN(matchRate) ? '' : matchRate,   // Cobertura (número entre 0 e 1)
+          round2(eCPM)                         // eCPM
+        ]);
+      }
+    } catch (e) {
+      Logger.log('Erro ao processar %s: %s', domain, e);
+      if (content) {
+        Logger.log('Body (primeiros 500 chars) de %s: %s', domain, content.substring(0, 500));
+      }
+    }
+  }
+
+  // --- Escrita otimizada na planilha ---
+  sheet.clearContents(); // mantém os formatos existentes da aba
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  if (allRows.length > 0) {
+    sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
+
+    const lastRow = allRows.length + 1; // +1 por causa do header
+
+    // Formatação numérica só no intervalo necessário (evita coluna inteira)
+    sheet.getRange(`H2:H${lastRow}`).setNumberFormat('#,##0.00'); // Receita (USD)
+    sheet.getRange(`J2:J${lastRow}`).setNumberFormat('#,##0.00'); // eCPM
+    sheet.getRange(`I2:I${lastRow}`).setNumberFormat('0.00%');    // Cobertura (%)
+  }
+}
